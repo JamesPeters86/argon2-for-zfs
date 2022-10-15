@@ -1,0 +1,211 @@
+#!/bin/bash
+# requires argon2 package
+salt="exowvfoafsdnewcmv"
+salt="frcxnm%&7JtqJzDO8L6O3lUja"
+
+# You can edit the following line to set the defualt share
+share="mainpool/zrd"
+
+# Help 
+if [[ $1 == "-h" ]] || [[ $1 == "-?" ]]; then
+	echo "./argpass [-p] [pool/volume]"
+	echo "./argpass [-s]"
+	echo "	-h, -?	Get this message."
+	echo "	-p	Print the hashstring so it can be used to setup the pool."
+	echo "	-s	Run setup. This will install prereqs if possible and "
+	echo "   	create an entry in the configuration for one share."
+	echo ""
+	echo "If no share is specified, the first share in argpass.cfg will be used"
+	echo ""
+	echo "If you don't want to display the hash to the screen, choose not to set"
+	echo "the password when running setup then do:"
+	echo "	./argpass -p pool/share | tail -1 | zfs create ..."
+	exit
+fi
+
+# Check for root
+# Setup
+if [[ $1 == "-s" ]]; then 
+	echo "Running Setup"
+
+	# Check for and install argon2
+	if ! command -v argon2 &> /dev/null;
+	then
+		echo "It looks like argon2 is not installed, would you like to install it with apt (y/n)?"
+		read yn
+		if command -v argon2 &> /dev/null;
+		then
+			apt install argon2
+		else
+	    		echo "It looks like argon2 is not installed and apt isn't either"
+			echo "So you're on your owni to install it."
+	        	exit
+		fi
+	fi
+
+	# Create startup directory
+	mkdir -p argpass.start.d
+	chmod 700 argpass.start.d
+
+	# Allow testing of paramters 
+	loop=1
+	checkTime=0
+	while [ $loop -ge 1 ]
+	do
+		echo "Number of iterations (defualt 6)?"
+		read iters # -t
+		if [ -z "${iters}" ]; then
+			iters=6
+		fi
+
+		echo "Parallelism to N threads (default 7)"
+		read parallelism # -p
+		if [ -z "${parallelism}" ]; then
+			parallelism=7
+		fi
+
+	#	echo "This value must be at least as high as the parallelism value."
+		echo "Nemory usage of 2^N KiB (default 19 which is 512 MB)" # -m
+		read memory # -t
+		if [ -z "${memory}" ]; then
+			memory=19
+		fi
+
+		echo "Testing..."
+		echo "argon2 SaltySal -p $parallelism -t $iters -m $memory "
+		time echo "Password"  | argon2 SaltySal -p $parallelism -t $iters -m $memory >/dev/null
+
+		echo "Keep current parameters, create New ones, or Exit (k/n/e)?"
+		read action
+		if [ $action == "k" ]; then 
+			loop=0
+		elif [ $action == "e" ]; then
+			exit
+		fi
+
+	done
+
+	# Setup  remainder of configuration
+	echo "Allow password to be seen while typeing (y/n)?" 
+	read echoOn
+	if [ $echoOn == "y" ]; then
+		echo "Here"
+		echoOn=1
+	else
+		echo "There"
+		echoOn=0
+	fi
+
+	echo "Share name (e.g. mypool/myshare)?"
+	read share
+
+	echo "Salt (must be at least 8 characters)?"
+	read salt
+
+	echo "Saving Settings...\n\n"
+ 	#format: $parallelism -t $iters -m $memory > /dev/null
+ 	echo "$share $salt $parallelism	$iters	$memory	$echoOn" >> argpass.cfg
+
+	echo "Would you like to write protect the config file (y/n)?"
+	read writeProtect
+	if [ $writeProtect == "y" ]; then
+		chmod a-w argpass.cfg
+
+	fi
+
+	echo "WARNING!!!         You should backup the argpass.cfg file.             WARNING!!!"
+	echo "WARNING!!! If you lose this file, you will lose access to your volumes WARNING!!!"
+
+	echo "Would you like to enter a password now (y/n)?"
+	read yn
+	if [[ $yn == "y" ]]; then
+        	echo "WARNING this will output the encryption key to the screen!"
+		echo "Password?"
+		if [ $echoOn -eq 1 ]; then
+			read passwd
+		else
+			read -s passwd
+		fi
+		hashstr=`echo $passwd | argon2 "$salt" -m $memory -p $parallelism -v 13 -t $iters | grep Hash | awk '{ print($2) }'`
+		echo $hashstr
+	fi
+
+	dotted=`echo $share | sed s/'\/'/./g`
+	mkdir -p argpass.start.d/$dotted
+	chmod go-w argpass.start.d/$dotted
+	exit
+fi
+
+# Check for existence of the cfg file
+if [ ! -f "argpass.cfg" ]; then
+	echo "argpass.cfg not found. To create it, run ./agrpass -s"
+	exit
+fi
+
+
+# Normal Operation
+# Parse Parameters
+disp=0
+if [[ $1 == "-p" ]]; then 
+	disp=1
+	clShare=$2
+else
+	clShare=$1
+fi
+
+# Search for an entry for the specified share or take the first entry if blank
+found=0
+while read -r share salt parallelism iters memory echoOn; do
+	if [ "$clShare" == $share ] || [ -z "${clShare}" ]; then
+		found=1
+		break
+	fi
+done < argpass.cfg
+if [ $found -eq 0 ]; then
+	echo "Error: share not found in configuration file"
+	exit
+fi
+
+# Get the password from the user
+if [ $disp -eq 1 ]; then
+       	echo "WARNING this will output the encryption key to the screen!"
+fi
+echo "Password?"
+if [ $echoOn -eq 1 ]; then
+	read passwd
+else
+	read -s passwd
+fi
+
+# Process Password
+hashstr=`echo $passwd | argon2 "$salt" -m $memory -p $parallelism -v 13 -t $iters | grep Hash | awk '{ print($2) }'`
+if [ $disp -eq 1 ]; then
+	echo $hashstr
+	exit
+fi
+
+#echo $share
+#echo $hashstr
+echo $hashstr | zfs load-key $share 2>/tmp/argpass.err
+
+# Check if it actually loaded
+if [ $? != 0 ]; then
+	echo "Error"
+	error=`cat /tmp/argpass.err`
+	rm /tmp/argpass.err
+	echo $error
+	if [[ $error != "Key load error: Key already loaded"* ]]; then
+		exit
+	fi
+fi
+
+zfs mount $share
+
+echo "Running Startup Scripts..."
+dotted=`echo $share | sed s/'\/'/./g`
+echo $dotted
+ls argpass.start.d/$dotted
+for i in `ls argpass.start.d/$dotted | sort -n`; do
+	source argpass.start.d/$dotted/$i
+done
+

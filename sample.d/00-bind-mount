@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo "Binding /rd to /mainpool/zrd"
+mount --bind /mainpool/zrd /rd
