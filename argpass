@@ -19,7 +19,7 @@ if [[ $1 == "-h" ]] || [[ $1 == "-?" ]]; then
 	echo ""
 	echo "If you don't want to display the hash to the screen, choose not to set"
 	echo "the password when running setup then do:"
-	echo "	./argpass -p pool/share | tail -1 | zfs create ..."
+	echo "	./argpass -p [pool/volume] | tail -1 | zfs create ..."
 	exit
 fi
 
@@ -96,7 +96,7 @@ if [[ $1 == "-s" ]]; then
 		echoOn=0
 	fi
 
-	echo "Share name (e.g. mypool/myshare)?"
+	echo "Full volume name (e.g. mypool/volume)?"
 	read share
 
 	echo "Salt (must be at least 8 characters)?"
@@ -162,7 +162,7 @@ while read -r share salt parallelism iters memory echoOn; do
 	fi
 done < argpass.cfg
 if [ $found -eq 0 ]; then
-	echo "Error: share not found in configuration file"
+	echo "Error: volume not found in configuration file"
 	exit
 fi
 
@@ -184,7 +184,6 @@ if [ $disp -eq 1 ]; then
 	exit
 fi
 
-#echo $share
 #echo $hashstr
 echo $hashstr | zfs load-key $share 2>/tmp/argpass.err
 
