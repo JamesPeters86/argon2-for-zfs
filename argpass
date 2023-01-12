@@ -1,10 +1,5 @@
 #!/bin/bash
 # requires argon2 package
-salt="exowvfoafsdnewcmv"
-salt="frcxnm%&7JtqJzDO8L6O3lUja"
-
-# You can edit the following line to set the defualt share
-share="mainpool/zrd"
 
 # Help 
 if [[ $1 == "-h" ]] || [[ $1 == "-?" ]]; then
@@ -12,18 +7,26 @@ if [[ $1 == "-h" ]] || [[ $1 == "-?" ]]; then
 	echo "./argpass [-s]"
 	echo "	-h, -?	Get this message."
 	echo "	-p	Print the hashstring so it can be used to setup the pool."
-	echo "	-s	Run setup. This will install prereqs if possible and "
-	echo "   	create an entry in the configuration for one share."
+	echo "	-s	Run setup. This will:"
+	echo "		   install prereqs if possible "
+	echo "   	   create an entry in the configuration for one dataset"
+	echo "		   optionally setup one dataset"
 	echo ""
-	echo "If no share is specified, the first share in argpass.cfg will be used"
+	echo "If no dataset is specified, the first one in argpass.cfg will be used"
 	echo ""
-	echo "If you don't want to display the hash to the screen, choose not to set"
-	echo "the password when running setup then do:"
+	echo "If you don't want to display the hash to the screen when using -p, do"
 	echo "	./argpass -p [pool/volume] | tail -1 | zfs create ..."
 	exit
 fi
 
 # Check for root
+who=`whoami`
+if [[ $who != "root" ]]; then 
+	echo "You need to be root!"
+	echo "For help, enter ./argpass -?"
+	exit
+fi
+
 # Setup
 if [[ $1 == "-s" ]]; then 
 	echo "Running Setup"
@@ -33,7 +36,7 @@ if [[ $1 == "-s" ]]; then
 	then
 		echo "It looks like argon2 is not installed, would you like to install it with apt (y/n)?"
 		read yn
-		if command -v argon2 &> /dev/null;
+		if command -v apt &> /dev/null;
 		then
 			apt install argon2
 		else
@@ -52,23 +55,23 @@ if [[ $1 == "-s" ]]; then
 	checkTime=0
 	while [ $loop -ge 1 ]
 	do
-		echo "Number of iterations (defualt 6)?"
+		echo "Number of iterations (defualt 2)?"
 		read iters # -t
 		if [ -z "${iters}" ]; then
-			iters=6
+			iters=2
 		fi
 
-		echo "Parallelism to N threads (default 7)"
+		echo "Parallelism to N threads (default 4)"
 		read parallelism # -p
 		if [ -z "${parallelism}" ]; then
-			parallelism=7
+			parallelism=4
 		fi
 
 	#	echo "This value must be at least as high as the parallelism value."
-		echo "Nemory usage of 2^N KiB (default 19 which is 512 MB)" # -m
+		echo "Nemory usage of 2^N KiB (default 21 which is 1 GB)" # -m
 		read memory # -t
 		if [ -z "${memory}" ]; then
-			memory=19
+			memory=21
 		fi
 
 		echo "Testing..."
@@ -89,10 +92,8 @@ if [[ $1 == "-s" ]]; then
 	echo "Allow password to be seen while typeing (y/n)?" 
 	read echoOn
 	if [ $echoOn == "y" ]; then
-		echo "Here"
 		echoOn=1
 	else
-		echo "There"
 		echoOn=0
 	fi
 
@@ -113,21 +114,44 @@ if [[ $1 == "-s" ]]; then
 
 	fi
 
-	echo "WARNING!!!         You should backup the argpass.cfg file.             WARNING!!!"
-	echo "WARNING!!! If you lose this file, you will lose access to your volumes WARNING!!!"
+	echo "WARNING!!!         You should backup the argpass.cfg file.              WARNING!!!"
+	echo "WARNING!!! If you lose this file, you will lose access to your datasets WARNING!!!"
 
-	echo "Would you like to enter a password now (y/n)?"
-	read yn
+	echo "Would you like to create the dataset now (y/n)?"
+	read createSet
+	if [[ $createSet != "y" ]]; then
+       	echo "WARNING this will output the encryption key to the screen!"
+		echo "Would you like to enter a password now (y/n)?"
+		read yn
+	else
+		yn="y"
+	fi
+
 	if [[ $yn == "y" ]]; then
-        	echo "WARNING this will output the encryption key to the screen!"
+
+		# Collect Password
 		echo "Password?"
 		if [ $echoOn -eq 1 ]; then
 			read passwd
 		else
 			read -s passwd
 		fi
+		echo "Genertating Key..."
+		# In hindsight I should have used echo -n, but it's too late to change
+		# without breaking systems already in use.
 		hashstr=`echo $passwd | argon2 "$salt" -m $memory -p $parallelism -v 13 -t $iters | grep Hash | awk '{ print($2) }'`
-		echo $hashstr
+
+
+		# Create dataset
+		if [[ $createSet == "y" ]]; then
+			echo "Enter dataset options, but do not include encryption or key-format"
+			echo "(e.g. -o compression=lz4 -o xattr=sa)"
+			read createOptions
+			echo $hashstr | zfs create -o encryption=on -o keyformat=hex \
+				$createOptions $share 
+		else
+			echo $hashstr
+		fi
 	fi
 
 	dotted=`echo $share | sed s/'\/'/./g`
